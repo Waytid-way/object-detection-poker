@@ -69,15 +69,15 @@ def detect():
                 }
             })
 
-        # ── 5. Deduplication ──────────────────
-        # หลักการ: สำรับไพ่ 52 ใบมาตรฐาน ไม่มีทางที่จะมีไพ่ใบเดียวกัน 2 ใบบนโต๊ะ
-        # ถ้า model detect "6D" ได้ 2 ครั้ง (87% และ 64%) → คือมุมบนซ้ายกับมุมล่างขวา
-        # ของใบเดียวกัน → เก็บแค่อัน confidence สูงสุด
+        # ── 5. Deduplication: class เดียวกัน เก็บแค่ confidence สูงสุด ──
         best_per_class = {}
         for det in raw_detections:
-            cls = det["class"]
-            if cls not in best_per_class or det["confidence"] > best_per_class[cls]["confidence"]:
+            cls = det['class']
+            if cls not in best_per_class:
                 best_per_class[cls] = det
+            else:
+                if det['confidence'] > best_per_class[cls]['confidence']:
+                    best_per_class[cls] = det
 
         detections = list(best_per_class.values())
 
