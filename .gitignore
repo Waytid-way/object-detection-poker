@@ -1,0 +1,37 @@
+# Model weights (large binary, do NOT commit)
+best.pt
+*.pt
+*.weights
+
+# Uploaded images (temporary, do NOT commit)
+uploads/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment
+pokerenv/
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Flask / env
+instance/
+.env
