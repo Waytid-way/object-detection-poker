@@ -3,6 +3,7 @@ import uuid
 from flask import Flask, request, jsonify, render_template
 from werkzeug.utils import secure_filename
 from ultralytics import YOLO
+from download_model import download_model
 
 
 app = Flask(__name__)
@@ -15,6 +16,8 @@ app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER  # ใช้ผ่าน app.config 
 
 CONFIDENCE_THRESHOLD = 0.5
 
+# Download model from Google Drive if not present
+download_model()
 model = YOLO("best.pt")
 
 # Routes
@@ -56,16 +59,16 @@ def detect():
             class_id   = int(box.cls[0])
             confidence = float(box.conf[0])
             label      = model.names[class_id]
-            x1, y1, x2, y2 = box.xyxy[0].tolist()
+            x1, y1, x2, y2 = box.xyxyn[0].tolist() # ใช้พิกัดแบบ Normalized (0-1)
 
             raw_detections.append({
                 "class":      label,
                 "confidence": round(confidence * 100, 1),
                 "box": {
-                    "left":   round(x1, 2),
-                    "top":    round(y1, 2),
-                    "width":  round(x2 - x1, 2),
-                    "height": round(y2 - y1, 2),
+                    "left":   round(x1 * 100, 2),
+                    "top":    round(y1 * 100, 2),
+                    "width":  round((x2 - x1) * 100, 2),
+                    "height": round((y2 - y1) * 100, 2),
                 }
             })
 
