@@ -1,6 +1,7 @@
 import os
 import uuid
 from flask import Flask, request, jsonify, render_template
+from werkzeug.utils import secure_filename
 from ultralytics import YOLO
 
 
@@ -10,6 +11,7 @@ app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB
 UPLOAD_FOLDER = "uploads"
 # สร้าง folder อัตโนมัติถ้ายังไม่มี — exist_ok=True ป้องกัน error ถ้ามีอยู่แล้ว
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER  # ใช้ผ่าน app.config ได้ทุกที่
 
 CONFIDENCE_THRESHOLD = 0.5
 
@@ -25,100 +27,74 @@ def index():
 @app.route("/detect", methods=["POST"])
 def detect():
     """
-    รับไฟล์รูปภาพ → ทำ YOLO inference → คืน JSON
+    รับไฟล์รูปภาพ → ทำ YOLO inference → Deduplicate → คืน JSON
 
-    Request:
-        Content-Type : multipart/form-data
-        Field name   : "image"
-
-    Response สำเร็จ (HTTP 200):
-    {
-        "success": true,
-        "count": 2,
-        "detections": [
-            {
-                "class": "AC",
-                "confidence": 95.2,
-                "box": { "left": 120.5, "top": 80.3, "width": 130.2, "height": 270.1 }
-            }
-        ]
-    }
-
-    Response error (HTTP 4xx/5xx):
-    { "error": "error message" }
+    Deduplication: สำรับไพ่มีแต่ละใบแค่ 1 ใบ
+    ถ้า detect ได้ class เดียวกัน 2 อัน → เก็บแค่อันที่ confidence สูงสุด
     """
-
-    # ── 1. Validate request ───────────────
-    if "image" not in request.files:
-        return jsonify({"error": "No image file provided. Use field name 'image'."}), 400
-
-    file = request.files["image"]
-    if file.filename == "":
-        return jsonify({"error": "Empty filename."}), 400
-
-    # ── 2. บันทึก temp file ───────────────
-    ext = os.path.splitext(file.filename)[1].lower() or ".jpg"
-    temp_filename = f"{uuid.uuid4().hex}{ext}"
-    temp_path = os.path.join(UPLOAD_FOLDER, temp_filename)
-    file.save(temp_path)
-
-    # ── 3. Inference + cleanup ─────────────
-    # เหตุผลที่ต้อง try/finally:
-    #   - ถ้า inference สำเร็จ  → ลบ temp file หลัง return
-    #   - ถ้า inference throw exception → ลบ temp file ก่อน propagate error
-    #   - ป้องกัน temp files สะสมใน uploads/ จนเต็ม disk
+    temp_path = None
     try:
+        # ── 1. Validate request ───────────────
+        if "image" not in request.files:
+            return jsonify({"error": "No image file provided. Use field name 'image'."}), 400
+
+        file = request.files["image"]
+        if file.filename == "":
+            return jsonify({"error": "Empty filename."}), 400
+
+        # ── 2. บันทึก temp file (secure_filename ป้องกัน path traversal) ──
+        filename = secure_filename(file.filename)
+        temp_path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+        file.save(temp_path)
+
+        # ── 3. Inference ──────────────────────
         results = model(temp_path, conf=CONFIDENCE_THRESHOLD)
 
-        detections = []
-        for result in results:
-            for box in result.boxes:
-                # ── class name ────────────────────────
-                class_name = model.names[int(box.cls[0])]
+        # ── 4. รวบรวม raw detections ทั้งหมด ──
+        raw_detections = []
+        for box in results[0].boxes:
+            class_id   = int(box.cls[0])
+            confidence = float(box.conf[0])
+            label      = model.names[class_id]
+            x1, y1, x2, y2 = box.xyxy[0].tolist()
 
-                # ── confidence: 0-1 → 0-100, round 1 dp ──
-                # เหตุผล: Frontend ตกลง format เป็น เปอร์เซ็นต์
-                # เช่น 0.9523 → 95.2 (อ่านง่ายกว่าและแสดงผลบนหน้าเว็บได้เลย)
-                confidence = round(float(box.conf[0]) * 100, 1)
-
-                # ── bbox: xyxy → {left, top, width, height} ──
-                # YOLO คืน xyxy = [x1, y1, x2, y2]  (corner coordinates)
-                # Frontend ต้องการ left/top/width/height แบบ CSS box model
-                # left   = x1          (ขอบซ้าย)
-                # top    = y1          (ขอบบน)
-                # width  = x2 - x1     (ความกว้าง)
-                # height = y2 - y1     (ความสูง)
-                x1, y1, x2, y2 = box.xyxy[0].tolist()
-                bounding_box = {
-                    "left":   round(x1, 1),
-                    "top":    round(y1, 1),
-                    "width":  round(x2 - x1, 1),
-                    "height": round(y2 - y1, 1),
+            raw_detections.append({
+                "class":      label,
+                "confidence": round(confidence * 100, 1),
+                "box": {
+                    "left":   round(x1, 2),
+                    "top":    round(y1, 2),
+                    "width":  round(x2 - x1, 2),
+                    "height": round(y2 - y1, 2),
                 }
+            })
 
-                detections.append(
-                    {
-                        "class":      class_name,
-                        "confidence": confidence,
-                        "box":        bounding_box,
-                    }
-                )
+        # ── 5. Deduplication ──────────────────
+        # หลักการ: สำรับไพ่ 52 ใบมาตรฐาน ไม่มีทางที่จะมีไพ่ใบเดียวกัน 2 ใบบนโต๊ะ
+        # ถ้า model detect "6D" ได้ 2 ครั้ง (87% และ 64%) → คือมุมบนซ้ายกับมุมล่างขวา
+        # ของใบเดียวกัน → เก็บแค่อัน confidence สูงสุด
+        best_per_class = {}
+        for det in raw_detections:
+            cls = det["class"]
+            if cls not in best_per_class or det["confidence"] > best_per_class[cls]["confidence"]:
+                best_per_class[cls] = det
 
-        return jsonify(
-            {
-                "success":    True,
-                "count":      len(detections),
-                "detections": detections,
-            }
-        )
+        detections = list(best_per_class.values())
+
+        return jsonify({
+            "success":    True,
+            "count":      len(detections),
+            "detections": detections,
+        })
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
     finally:
         # ลบ temp file เสมอ ไม่ว่าจะสำเร็จหรือ exception
-        if os.path.exists(temp_path):
+        if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)
+
 
 
 
