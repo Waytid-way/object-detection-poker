@@ -3,9 +3,7 @@ import uuid
 from flask import Flask, request, jsonify, render_template
 from ultralytics import YOLO
 
-# ─────────────────────────────────────────
-# App configuration
-# ─────────────────────────────────────────
+
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB
 
@@ -15,19 +13,9 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 CONFIDENCE_THRESHOLD = 0.5
 
-# ─────────────────────────────────────────
-# โหลด YOLO model ครั้งเดียวตอน startup
-# ─────────────────────────────────────────
-# เหตุผลที่โหลดนอก function:
-#   - YOLO model มีขนาดใหญ่ โหลดช้า (~1-2 วินาที)
-#   - ถ้าโหลดใน /detect ทุก request ผู้ใช้จะรอนานมาก
-#   - Python module-level code รันครั้งเดียวตอน startup เท่านั้น
 model = YOLO("best.pt")
 
-
-# ─────────────────────────────────────────
 # Routes
-# ─────────────────────────────────────────
 @app.route("/", methods=["GET"])
 def index():
     """Serve หน้า frontend หลัก"""
@@ -133,9 +121,8 @@ def detect():
             os.remove(temp_path)
 
 
-# ─────────────────────────────────────────
+
 # Entry point
-# ─────────────────────────────────────────
 if __name__ == "__main__":
     # debug=True: auto-reload เมื่อแก้โค้ด + แสดง error detail บน browser
     # host='0.0.0.0': รับ connection จากทุก IP (ไม่ใช่แค่ localhost)

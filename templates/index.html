@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="th">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Poker Card Detector - AIE223</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>Poker Card Detector</h1>
+            <p>AIE223 Project - YOLO26n (mAP@50: 85%)</p>
+        </header>
+
+        <div class="controls-section">
+            <div class="confidence-filter">
+                <label for="confSlider">กรองความมั่นใจ (Confidence): <span id="confValue">50</span>%</label>
+                <input type="range" id="confSlider" min="0" max="100" value="50">
+            </div>
+            <div class="webcam-control">
+                <button type="button" id="webcamBtn" class="btn-blue">📸 เปิดกล้อง Webcam</button>
+            </div>
+        </div>
+
+        <section class="upload-section">
+            <form id="uploadForm">
+                <input type="file" id="imageInput" accept=".jpg, .jpeg, .png, .mp4, .webm">
+                <button type="submit" id="detectBtn">Detect Cards</button>
+            </form>
+            <p id="statusText">กรุณาอัปโหลดรูปภาพ/วิดีโอ หรือเปิดกล้อง</p>
+        </section>
+
+        <div id="summarySection" class="summary-section hidden">
+            <h3>🃏 Current Hand Analysis (ไพ่บนโต๊ะ)</h3>
+            <p id="summaryText"></p>
+        </div>
+
+        <section class="result-section">
+            <div id="imageContainer" class="image-wrapper hidden">
+                <img id="resultImage" src="" alt="Uploaded Image" class="hidden">
+                <video id="resultVideo" src="" controls muted autoplay loop class="hidden"></video>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        const form = document.getElementById('uploadForm');
+        const imageInput = document.getElementById('imageInput');
+        const imageContainer = document.getElementById('imageContainer');
+        const resultImage = document.getElementById('resultImage');
+        const resultVideo = document.getElementById('resultVideo');
+        const statusText = document.getElementById('statusText');
+        const detectBtn = document.getElementById('detectBtn');
+
+        // ตัวแปรฟีเจอร์ใหม่
+        const confSlider = document.getElementById('confSlider');
+        const confValue = document.getElementById('confValue');
+        const webcamBtn = document.getElementById('webcamBtn');
+        const summarySection = document.getElementById('summarySection');
+        const summaryText = document.getElementById('summaryText');
+
+        // ตัวแปรเก็บข้อมูล Mock Data เอาไว้ให้ Slider ใช้คำนวณแบบ Real-time
+        let currentDetections = [];
+
+        // --- ฟังก์ชัน 1: อัปเดตตัวเลข Slider และวาดกรอบใหม่ ---
+        confSlider.addEventListener('input', (e) => {
+            const threshold = e.target.value;
+            confValue.innerText = threshold;
+            if (currentDetections.length > 0) {
+                renderDetections(threshold);
+            }
+        });
+
+        // --- ฟังก์ชัน 2: แปลงคลาส (เช่น AC) เป็นสัญลักษณ์ไพ่ (A♣) ---
+        function formatCardSymbol(className) {
+            const suitMap = { 'S': '♠', 'H': '♥', 'D': '♦', 'C': '♣' };
+            const rank = className.slice(0, -1);
+            const suit = className.slice(-1);
+            return `${rank}${suitMap[suit] || suit}`;
+        }
+
+        // --- ฟังก์ชัน 3: วาดกรอบและสรุปข้อความ ---
+        function renderDetections(threshold) {
+            // ลบของเก่าออกให้หมด
+            document.querySelectorAll('.bounding-box').forEach(box => box.remove());
+
+            let detectedCards = [];
+
+            currentDetections.forEach(det => {
+                // เช็คว่าผ่านเกณฑ์ Confidence ไหม
+                if (det.confidence >= threshold) {
+                    // วาดกรอบ
+                    const box = document.createElement('div');
+                    box.className = 'bounding-box';
+                    box.style.top = det.box.top + '%';
+                    box.style.left = det.box.left + '%';
+                    box.style.width = det.box.width + '%';
+                    box.style.height = det.box.height + '%';
+
+                    const label = document.createElement('span');
+                    label.className = 'box-label';
+                    label.innerText = `${det.class}: ${det.confidence}%`;
+
+                    box.appendChild(label);
+                    imageContainer.appendChild(box);
+
+                    // เก็บชื่อไพ่ไปทำสรุป
+                    detectedCards.push(formatCardSymbol(det.class));
+                }
+            });
+
+            // อัปเดตข้อความสรุปไพ่
+            if (detectedCards.length > 0) {
+                summarySection.classList.remove('hidden');
+                summaryText.innerHTML = `ตรวจพบไพ่จำนวน <strong>${detectedCards.length}</strong> ใบ ได้แก่: <span style="color:#d35400; font-size:1.2rem; font-weight:bold;">${detectedCards.join(', ')}</span>`;
+            } else {
+                summarySection.classList.remove('hidden');
+                summaryText.innerHTML = "ไม่พบไพ่ที่ตรงตามเกณฑ์ความมั่นใจ";
+            }
+        }
+
+        // --- ฟังก์ชัน 4: ระบบ Upload ---
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const file = imageInput.files[0];
+            if (!file) return;
+
+            // ปิดกล้องถ้าเปิดอยู่
+            if (resultVideo.srcObject) {
+                resultVideo.srcObject.getTracks().forEach(track => track.stop());
+                resultVideo.srcObject = null;
+            }
+
+            detectBtn.disabled = true;
+            detectBtn.innerText = "กำลังประมวลผล...";
+            statusText.innerText = "กำลังวิเคราะห์ภาพ...";
+            summarySection.classList.add('hidden');
+
+            const objectUrl = URL.createObjectURL(file);
+            imageContainer.classList.remove('hidden');
+            document.querySelectorAll('.bounding-box').forEach(box => box.remove());
+
+            const isVideo = file.type.startsWith('video/');
+            if (isVideo) {
+                resultImage.classList.add('hidden');
+                resultVideo.src = objectUrl;
+                resultVideo.classList.remove('hidden');
+            } else {
+                resultVideo.classList.add('hidden');
+                resultImage.src = objectUrl;
+                resultImage.classList.remove('hidden');
+            }
+
+            // --- เริ่มต้นการเรียก API ของจริง (Integration) ---
+            const formData = new FormData();
+            formData.append('image', file); // ต้องตรงกับชื่อ field ใน app.py: request.files['image']
+
+            try {
+                const response = await fetch('/detect', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                if (!isVideo) {
+                    currentDetections = data.detections || [];
+                    renderDetections(confSlider.value);
+                    statusText.innerText = "Detection สำเร็จ! (เชื่อมต่อ API จริงแล้ว)";
+                } else {
+                    currentDetections = [];
+                    statusText.innerText = "วิดีโอเล่นได้แล้ว! (หมายเหตุ: ตรวจสอบกับเวย์ว่า Backend รองรับการคืนค่า Video ไหม)";
+                }
+
+            } catch (error) {
+                console.error("Detection Error:", error);
+                statusText.innerText = "❌ เกิดข้อผิดพลาด: ไม่สามารถเชื่อมต่อ API /detect ได้";
+                summarySection.classList.add('hidden');
+            } finally {
+                detectBtn.disabled = false;
+                detectBtn.innerText = "Detect Cards";
+            }
+        }); // <--- จุดที่เพิ่ม: วงเล็บปิดฟังก์ชัน Submit ที่หายไปตอนแรกครับ
+
+        // --- ฟังก์ชัน 5: ระบบ Webcam (UI Demo) ---
+        webcamBtn.addEventListener('click', async () => {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+
+                resultImage.classList.add('hidden');
+                resultVideo.classList.remove('hidden');
+                imageContainer.classList.remove('hidden');
+                summarySection.classList.add('hidden');
+                document.querySelectorAll('.bounding-box').forEach(box => box.remove());
+
+                resultVideo.src = "";
+                resultVideo.srcObject = stream;
+                resultVideo.play();
+
+                statusText.innerText = "🟢 กล้องทำงานแล้ว! (นี่คือ UI เดโมกล้องสดตาม MVP3)";
+                currentDetections = [];
+
+            } catch (err) {
+                alert("ไม่สามารถเปิดกล้องได้ กรุณาตรวจสอบการอนุญาตบนเบราว์เซอร์");
+                console.error(err);
+            }
+        });
+    </script>
+</body>
+
+</html>
